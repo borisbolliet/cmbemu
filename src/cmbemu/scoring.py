@@ -84,6 +84,21 @@ def chi2_mae_blocks(
     }
 
 
-def combined_score(mae: float, t_cpu_ms: float, alpha: float = 1.0) -> float:
-    """S = log10(mae) + alpha * log10(t_cpu_ms)."""
-    return float(np.log10(mae) + alpha * np.log10(t_cpu_ms))
+def combined_score(
+    mae: float,
+    t_cpu_ms: float,
+    alpha: float = 1.0,
+    t_floor_ms: float = 1.0,
+) -> float:
+    """Combined precision + speed score (lower is better).
+
+        S = log10(mae) + alpha * log10(max(t_cpu_ms, t_floor_ms))
+
+    The speed term is floored at ``t_floor_ms`` (default 1 ms) because
+    sub-millisecond inference provides no additional benefit for the MCMC
+    workloads this benchmark targets: overhead moves elsewhere (proposal
+    generation, other likelihood terms, chain bookkeeping). Above the floor,
+    ``alpha`` decades of precision trade for one decade of speed.
+    """
+    t_eff = max(float(t_cpu_ms), float(t_floor_ms))
+    return float(np.log10(mae) + alpha * np.log10(t_eff))

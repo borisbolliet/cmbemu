@@ -73,8 +73,12 @@ For every ordered pair $(i, j)$ of test-set cosmologies, the scorer treats $C_\e
 - **Speed score**:
   $T_{\text{CPU, ms}}$ = mean wall time per `predict()` call, averaged over 1 000 warm sequential calls with fresh LHC parameters, with JAX/TF pinned to CPU.
 - **Combined score** (lower is better):
-  $$S = \log_{10}\!\bigl(S_{\text{prec}}\bigr) + \alpha\,\log_{10}\!\bigl(T_{\text{CPU, ms}}\bigr),\qquad \alpha = 1.$$
-  Halving precision error compensates doubling inference time, and vice versa.
+  $$S = \log_{10}\!\bigl(S_{\text{prec}}\bigr) + \alpha\,\log_{10}\!\bigl(\max(T_{\text{CPU, ms}},\; T_{\text{floor}})\bigr),\qquad \alpha = 1,\quad T_{\text{floor}} = 1\ \text{ms}.$$
+  Above the floor, halving precision error compensates doubling inference
+  time, and vice versa. **Sub-millisecond inference buys no further speed
+  credit** — MCMC per-step overhead dominates below ~1 ms, so additional
+  nanoseconds have no effect on chain throughput. Same-precision emulators
+  still break ties on speed, but only down to the floor.
 
 ## How to run the scorer
 
@@ -182,7 +186,7 @@ emu = cec.NearestNeighbour(train)
 result = cec.get_score(emu)
 ```
 
-Expected ballpark on the full test set: `ConstantPlanck` → `combined_S ≈ 4.2` (huge precision error, microsecond speed). Any real emulator should beat this on precision by many decades.
+Expected ballpark on the full test set: `ConstantPlanck` → `combined_S ≈ 7.05` (huge precision error; its microsecond speed hits the 1 ms floor so the timing term is 0). Any real emulator should beat this on precision by many decades.
 
 ## End-to-end example
 

@@ -45,7 +45,7 @@ from .scoring import chi2_mae, combined_score
 # Baselines
 from .baselines import ConstantPlanck, NearestNeighbour
 
-__version__ = "0.1.0a1"
+__version__ = "0.1.0a2"
 
 __all__ = [
     "__version__",

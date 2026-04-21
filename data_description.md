@@ -146,7 +146,7 @@ test = cec.load_test()
 emu  = cec.ConstantPlanck(lmax_cmb=test["lmax_cmb"], lmax_pp=test["lmax_pp"])
 result = cec.get_score(emu, test=test)
 print(result["combined_S"], result["mae_total"]["mae"])
-# Expect combined_S ~ 4.2, mae_total ~ 1.13e7
+# Expect combined_S ~ 7.05, mae_total ~ 1.13e7
 ```
 
 If those numbers come out close to the expected values, you're ready to swap in a real emulator.

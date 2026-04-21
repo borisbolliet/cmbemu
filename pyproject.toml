@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cmbemu"
-version = "0.1.0a1"
+version = "0.1.0a2"
 description = "CMB-spectrum emulator competition: pre-generated training data, Wishart-likelihood scoring, and CPU timing harness built on classy_szfast."
 readme = "README.md"
 requires-python = ">=3.12"

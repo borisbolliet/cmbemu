@@ -49,12 +49,13 @@ STATUS.md              current state & remaining work
 
 ## Conventions worth knowing
 
-- Pass `H0` (not `h`) to classy_szfast. The comment in `emu_competition_data_setup.py:16` notes this matches the emulators and avoids ambiguity when cross-checking with CAMB.
+- Pass `H0` (not `h`) to classy_szfast — this matches the emulators and avoids ambiguity when cross-checking with CAMB. See `cmbemu.PARAM_NAMES` for the canonical ordering.
 - `get_cmb_cls` returns `ell`-indexed arrays including $\ell = 0, 1$; the likelihood slices from $\ell = 2$. Storage keeps $\ell = 0, 1$ for convenience.
 - **`cosmo_model` must be set via `csz.set({"cosmo_model": N})` BEFORE `initialize_classy_szfast()`** — passing it in `params_values_dict` per call is silently ignored. The competition is locked to `cosmo_model=6` (`ede-v2`).
 - `chi^2` as defined here is **unit-invariant** — any consistent rescaling of $C_\ell$ (e.g. $D_\ell$ vs $C_\ell$, K² vs μK²) cancels in `Tr` and `log det`.
 - Wide-box + CV-limited likelihood → typical off-diagonal $\chi^2 \sim 10^7$; cuts at $\chi^2 < 40$ leave no pairs. Scoring uses **MAE on $\Delta\chi^2$ with no cut**; MSE would be tail-dominated quadratically.
 - CMB (TT/TE/EE) and PP are the natural composability units — `chi2_matrix_split` returns them separately; `chi2_mae_blocks` reports the three sub-scores.
+- Combined score has a **soft floor at $T_\text{floor} = 1$ ms** on the timing term (default in `combined_score` / `get_score`): sub-ms inference gives no further credit since per-step MCMC overhead dominates below that scale. Don't remove the floor without a reason — it's the reason the `ConstantPlanck` baseline's μs speed doesn't turn its awful precision into a winning score.
 
 ## Gotchas
 

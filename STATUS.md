@@ -32,10 +32,10 @@ Covers Planck 2018 to ≥10σ per axis, comfortably inside the ede-v2 emulator t
 - Primary precision score: **MAE on $\Delta\chi^2$**, all off-diagonal pairs, no cut.
 - Sub-scores (natural composability units): **CMB block** (2×2 TT/TE/EE Wishart) and **PP block** (independent 1×1 Wishart).
 - Speed: mean CPU wall time of 1 000 warm sequential `predict()` calls, CPU-pinned.
-- Combined: $S = \log_{10}(\text{MAE}) + \alpha \log_{10}(T_\text{CPU,ms})$ with $\alpha = 1$.
-- ConstantPlanck baseline: $\text{MAE} \approx 1.13 \times 10^{7}$, $T \approx 1.5\,\mu\text{s}$, $S \approx 4.23$.
+- Combined: $S = \log_{10}(\text{MAE}) + \alpha \log_{10}(\max(T_\text{CPU,ms}, T_\text{floor}))$ with $\alpha = 1$, $T_\text{floor} = 1$ ms (sub-ms inference buys no further credit).
+- ConstantPlanck baseline: $\text{MAE} \approx 1.13 \times 10^{7}$, $T \approx 1.5\,\mu\text{s}$ → timing term floored to $0$, $S \approx 7.05$.
 
-### Package (`cmbemu` v0.1.0a1)
+### Package (`cmbemu` v0.1.0a2)
 - Installable via `pip install -e .` locally; PyPI publish is the next milestone.
 - Public API: `load_train / load_test / download_data / generate_data / get_score / ConstantPlanck / NearestNeighbour`.
 - CLI: `cmbemu download | generate | score-baseline`.

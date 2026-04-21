@@ -84,19 +84,28 @@ parameters drawn fresh from the LHC at every call.
 
 $$
 S \;=\; \log_{10}\!\bigl(S_{\text{prec}}\bigr)
-\;+\; \alpha \, \log_{10}\!\bigl(T_{\text{CPU},\,\text{ms}}\bigr).
+\;+\; \alpha \, \log_{10}\!\bigl(\max(T_{\text{CPU},\,\text{ms}},\; T_{\text{floor}})\bigr).
 $$
 
-Lower is better. $\alpha$ is the precision-vs-speed tradeoff weight;
-default $\alpha = 1$ (one decade of precision trades against one decade of
-speed).
+Lower is better.
+
+$\alpha$ is the precision-vs-speed tradeoff weight. With default $\alpha = 1$,
+above the floor one decade of precision trades for one decade of speed.
+
+$T_{\text{floor}} = 1$ ms is a **soft floor** on the timing term: sub-ms
+inference does not buy further speed credit, because a realistic MCMC's
+per-step overhead (proposal generation, other likelihood terms, chain
+bookkeeping) dominates below ~1 ms and no further gains are available at the
+chain level. Same-precision emulators still break ties on speed, but only
+down to the floor.
 
 ### Defaults
 
-| Symbol | Meaning | Value |
-|---|---|---|
-| $N$ | test-set size | 5000 |
-| $\ell_{\max}^{\text{CMB}}$ | TT/TE/EE upper $\ell$ | 6000 |
-| $\ell_{\max}^{\phi\phi}$ | lensing $\ell$ | 3000 |
-| $f_{\text{sky}}$ | sky fraction | 1.0 |
-| $\alpha$ | speed weight | 1.0 |
+| Symbol              | Meaning                     | Value |
+|---------------------|-----------------------------|:-----:|
+| $N$                 | test-set size               | 5000  |
+| $\ell_{\max}^{\text{CMB}}$ | TT/TE/EE upper $\ell$ | 6000  |
+| $\ell_{\max}^{\phi\phi}$   | lensing $\ell$         | 3000  |
+| $f_{\text{sky}}$    | sky fraction                | 1.0   |
+| $\alpha$            | speed weight                | 1.0   |
+| $T_{\text{floor}}$  | soft floor on timing term (ms) | 1.0 |

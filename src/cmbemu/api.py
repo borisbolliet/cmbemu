@@ -106,6 +106,7 @@ def get_score(
     emulator: EmulatorProtocol,
     test: dict | None = None,
     alpha: float = 1.0,
+    t_floor_ms: float = 1.0,
     n_timing_calls: int = 1000,
     n_timing_warmup: int = 10,
     timing_seed: int = 0,
@@ -120,6 +121,9 @@ def get_score(
     test : a test-set dict as returned by ``load_test``. If None, the
         default test set is downloaded via ``load_test``.
     alpha : precision-vs-speed tradeoff in the combined score.
+    t_floor_ms : soft floor (default 1 ms) on the timing term of
+        ``combined_S``. Sub-millisecond inference does not buy further
+        improvements in the MCMC workloads this benchmark targets.
     n_timing_calls, n_timing_warmup, timing_seed : benchmark knobs.
     measure_timing : set False to skip the timing harness entirely.
     strict_cpu : raise if JAX is not pinned to CPU.
@@ -163,7 +167,8 @@ def get_score(
     # 5) Combined score
     S = None
     if timing is not None:
-        S = combined_score(maes["total"]["mae"], timing.t_cpu_ms_mean, alpha=alpha)
+        S = combined_score(maes["total"]["mae"], timing.t_cpu_ms_mean,
+                           alpha=alpha, t_floor_ms=t_floor_ms)
 
     return {
         "mae_total": maes["total"],
