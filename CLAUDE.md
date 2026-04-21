@@ -29,9 +29,8 @@ scripts/               internal build + validation tools (not shipped)
 data/                  local copy of the .npz files (gitignored)
 plots/                 validation plots (gitignored)
 
-idea.md                competition pitch
+idea.md                competition pitch + formal score definition (Wishart, MAE, combined_S)
 data_description.md    dataset deep-dive
-scoring.md             formal score definition (Wishart + MAE + combined_S)
 STATUS.md              current state & remaining work
 ```
 

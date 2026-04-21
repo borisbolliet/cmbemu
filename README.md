@@ -56,16 +56,17 @@ full = cec.get_score(emu)                # both + combined_S
 
 ### What `combined_S` is
 
-The single scalar leaderboard number:
+The single scalar leaderboard number. With $E$ = `mae_total` (the precision MAE),
+$T$ = mean CPU time per call in ms, $T_0$ = `t_floor_ms` (default 1 ms),
+$\alpha$ = `alpha` (default 1):
 
 $$
-S = \log_{10}(\texttt{mae\_total}) + \alpha \cdot \log_{10}\!\bigl(\max(t_{\text{cpu\_ms, mean}},\; T_{\text{floor}})\bigr)
+S \;=\; \log_{10}(E) \,+\, \alpha \cdot \log_{10}(\max(T,\, T_0))
 $$
 
-with defaults $\alpha = 1.0$ and $T_{\text{floor}} = 1$ ms. Lower is better.
-Above the floor, one decade of precision trades for one decade of speed;
-sub-millisecond inference buys no further credit (MCMC per-step overhead
-dominates below that scale).
+Lower is better. Above the floor, one decade of precision trades for one
+decade of speed; sub-millisecond inference buys no further credit (MCMC
+per-step overhead dominates below that scale).
 
 Precision and speed are cleanly decomposed: you can recompute `combined_S`
 from the two sub-scores yourself:
@@ -77,7 +78,8 @@ S   = cec.combined_score(acc["mae_total"]["mae"], tim["t_cpu_ms_mean"])
 # S == cec.get_score(emu)["combined_S"]  (up to timing noise across reruns)
 ```
 
-See [`scoring.md`](scoring.md) for the full Wishart likelihood derivation.
+See [`idea.md`](idea.md#scoring) for the full Wishart derivation, block
+decomposition, and rationale for MAE over MSE.
 
 ## CPU timing setup
 
@@ -119,5 +121,4 @@ real emulator should beat this on precision by many decades.
 - `scripts/` — internal dataset-building and diagnostic tools
 - `idea.md` — competition pitch
 - `data_description.md` — dataset schema + loading patterns
-- `scoring.md` — Wishart likelihood + combined score definition
 - `STATUS.md` — current state of the competition design

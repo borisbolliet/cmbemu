@@ -63,22 +63,146 @@ That is all the scorer requires — no base class, no registration, no extra met
 
 ## Scoring
 
-Full definition in [`scoring.md`](scoring.md). Short version:
+The score has two components, precision and speed, combined into a single
+scalar.
 
-For every ordered pair $(i, j)$ of test-set cosmologies, the scorer treats $C_\ell^{\text{true}}(\theta_i)$ as mock data and evaluates the full-sky, cosmic-variance-limited Wishart log-likelihood with theory = `true(θ_j)` and with theory = `emulator(θ_j)`. The difference between those two χ²s measures the emulator's likelihood-level error.
+### Setup
 
-- **Primary precision score** (lower is better):
-  $$S_{\text{prec}} = \frac{1}{N(N-1)} \sum_{i \neq j} \bigl|\, \chi^2_{\text{emu}}(i,j) - \chi^2_{\text{true}}(i,j) \,\bigr|$$
-  i.e. **MAE on Δχ²** over all 24 995 000 off-diagonal pairs. No cut — uses every pair.
-- **Speed score**:
-  $T_{\text{CPU, ms}}$ = mean wall time per `predict()` call, averaged over 1 000 warm sequential calls with fresh LHC parameters, with JAX/TF pinned to CPU.
-- **Combined score** (lower is better):
-  $$S = \log_{10}\!\bigl(S_{\text{prec}}\bigr) + \alpha\,\log_{10}\!\bigl(\max(T_{\text{CPU, ms}},\; T_{\text{floor}})\bigr),\qquad \alpha = 1,\quad T_{\text{floor}} = 1\ \text{ms}.$$
-  Above the floor, halving precision error compensates doubling inference
-  time, and vice versa. **Sub-millisecond inference buys no further speed
-  credit** — MCMC per-step overhead dominates below ~1 ms, so additional
-  nanoseconds have no effect on chain throughput. Same-precision emulators
-  still break ties on speed, but only down to the floor.
+- **Test set**: $N = 5000$ parameter points $\{\theta_j\}_{j=1}^{N}$, each with
+  a reference spectrum $C_\ell^{\mathrm{true}}(\theta_j)$ shipped with the
+  data: TT, TE, EE for $\ell \in [2, 6000]$ and $\phi\phi$ for
+  $\ell \in [2, 3000]$.
+- Submission provides $C_\ell^{\mathrm{emu}}(\theta_j)$ for every test point.
+- For each ordered pair $(i, j)$, treat $C_\ell^{\mathrm{true}}(\theta_i)$ as
+  mock observed data $\hat D_i$ and the spectrum at $j$ (either true or
+  emulated) as theory. Compute the full-sky Wishart log-likelihood.
+
+### Per-pair $\chi^2$ (Wishart form)
+
+At each multipole the spherical-harmonic coefficients $a_{\ell m}$ are
+$(2\ell+1)$ i.i.d. Gaussian samples, so the empirical covariance is
+Wishart-distributed. Taking $-2\log$ of the Wishart density and dropping
+theory-independent constants gives the standard `mock_cmb`-style form:
+
+$$
+\chi^2(i, j) = \sum_{\ell=2}^{6000} (2\ell+1)\, f_{\mathrm{sky}}
+\left[
+\mathrm{Tr}\!\left( C_\ell(\theta_i)\, C_\ell(\theta_j)^{-1} \right)
++ \log \frac{|C_\ell(\theta_j)|}{|C_\ell(\theta_i)|}
+- 2
+\right]
++ \sum_{\ell=2}^{3000} (2\ell+1)\, f_{\mathrm{sky}}
+\left[
+\frac{C_\ell^{\phi\phi}(\theta_i)}{C_\ell^{\phi\phi}(\theta_j)}
++ \log \frac{C_\ell^{\phi\phi}(\theta_j)}{C_\ell^{\phi\phi}(\theta_i)}
+- 1
+\right]
+$$
+
+where
+
+$$
+C_\ell(\theta) = \begin{pmatrix} C_\ell^{TT}(\theta) & C_\ell^{TE}(\theta) \\ C_\ell^{TE}(\theta) & C_\ell^{EE}(\theta) \end{pmatrix}.
+$$
+
+This is the **exact** Wishart log-likelihood at all multipoles including
+low-$\ell$; no Gaussian-in-$C_\ell$ approximation. The $(2\ell+1)f_{\mathrm{sky}}$
+prefactor is the number of independent modes per multipole (correct
+cosmic-variance weighting).
+
+Defaults: $f_{\mathrm{sky}} = 1$ (cosmic-variance limited, no instrumental
+noise), $\ell_{\max}^{\mathrm{CMB}} = 6000$, $\ell_{\max}^{\phi\phi} = 3000$.
+
+Evaluating the formula with theory $= C^{\mathrm{true}}(\theta_j)$ gives
+$\chi^2_{\mathrm{true}}(i, j)$; with theory $= C^{\mathrm{emu}}(\theta_j)$
+gives $\chi^2_{\mathrm{emu}}(i, j)$. By construction
+$\chi^2_{\mathrm{true}}(i, i) = 0$ exactly.
+
+### Precision score: MAE on $\Delta\chi^2$
+
+$$
+S_{\mathrm{prec}} = \frac{1}{N(N - 1)} \sum_{i \neq j}
+\bigl|\, \chi^2_{\mathrm{emu}}(i, j) - \chi^2_{\mathrm{true}}(i, j) \,\bigr|
+$$
+
+No clipping. All $N(N-1) = 24{,}995{,}000$ off-diagonal pairs count equally.
+Diagonal pairs are excluded because $\chi^2_{\mathrm{true}}(i, i) = 0$ exactly.
+
+**Why MAE and not MSE?** Under a fractionally accurate emulator,
+$|\Delta\chi^2|$ grows roughly linearly with $\chi^2_{\mathrm{true}}$ (a
+$\delta$-level spectral error gives $\Delta\chi^2 \sim 2\delta \cdot
+\chi^2_{\mathrm{true}}$). Because the competition parameter box is wide
+($\pm 20\sigma$ Planck on most axes) and the likelihood is
+cosmic-variance-limited, $\chi^2_{\mathrm{true}}$ spans $10^4$–$10^8$ between
+random test pairs. MSE would be quadratically tail-dominated — a handful of
+extreme pairs would drown out everything else. MAE is linear in
+$|\Delta\chi^2|$, preserves absolute-likelihood-level matching, and is
+vastly less outlier-sensitive.
+
+### Block decomposition
+
+TT, TE, EE share a $2 \times 2$ Wishart covariance — they are emulated
+together. $\phi\phi$ is independent (different likelihood, different signal).
+So `get_score` returns three separate MAEs, computed with the same formula
+restricted to the corresponding block:
+
+| Key         | What it measures                                |
+|-------------|-------------------------------------------------|
+| `mae_cmb`   | TT/TE/EE $2\times 2$ Wishart block only        |
+| `mae_pp`    | $\phi\phi$ $1\times 1$ Wishart block only      |
+| `mae_total` | sum of both (the primary precision score)       |
+
+These are the natural composability units for the three-track leaderboard
+(see **Three leaderboards** below).
+
+### Speed score
+
+$T_{\mathrm{CPU}}$ = mean wall time (ms) per `predict(params_dict)` call.
+Protocol:
+
+- Sample `n_warmup + n_calls` uniform-random LHC points in the competition
+  box (defaults 10 + 1000).
+- Do `n_warmup` untimed warmup calls — absorbs JIT compile, lazy init,
+  first-page-fault overhead.
+- Time each of the remaining `n_calls` calls individually with
+  `time.perf_counter_ns`. Only `emulator.predict(p)` is inside the timer;
+  the dict conversion is outside.
+- Report mean (used in `combined_S`), median, and standard deviation.
+- Every call uses a **different** input to prevent result caching.
+- **Single-threaded, CPU-only** — MCMC is sequential and typically runs on a
+  CPU node. Export `JAX_PLATFORMS=cpu` and `CUDA_VISIBLE_DEVICES=` before
+  importing your emulator. Pass `strict_cpu=True` to raise on GPU backends.
+
+Mean, not median, because MCMC wall time is `mean × n_steps` — median would
+underreport occasional slow calls.
+
+### Combined score
+
+$$
+S = \log_{10}(S_{\mathrm{prec}}) + \alpha \cdot \log_{10}(\max(T_{\mathrm{CPU}},\ T_0))
+$$
+
+where $T_{\mathrm{CPU}}$ is `t_cpu_ms_mean` and $T_0$ is the soft floor on
+the timing term. **Lower is better.** Defaults: $\alpha = 1$, $T_0 = 1$ ms.
+
+- Above the floor, one decade of precision trades for one decade of speed
+  (with $\alpha = 1$).
+- **Below the floor, $T_0$ caps the benefit.** Sub-millisecond inference buys
+  no further credit because realistic MCMC per-step overhead (proposal
+  generation, other likelihood pieces, chain bookkeeping) dominates below
+  $\sim 1$ ms. Same-precision emulators still break ties on speed, but only
+  down to the floor.
+
+### Defaults
+
+| Symbol                        | Meaning                          |   Value |
+|-------------------------------|----------------------------------|--------:|
+| $N$                           | test-set size                    |    5000 |
+| $\ell_{\max}^{\mathrm{CMB}}$  | TT/TE/EE upper $\ell$            |    6000 |
+| $\ell_{\max}^{\phi\phi}$      | lensing upper $\ell$             |    3000 |
+| $f_{\mathrm{sky}}$            | sky fraction                     |     1.0 |
+| $\alpha$                      | precision-vs-speed weight        |     1.0 |
+| $T_0$                         | soft floor on timing term (ms)   |     1.0 |
 
 ## How to run the scorer
 
@@ -131,10 +255,11 @@ tim = cec.get_time_score(emu, n_calls=1000, strict_cpu=True)
 
 ### `get_score(emu, alpha=1.0, t_floor_ms=1.0, ...)`
 
-Computes both sub-scores above, then the **combined scalar** leaderboard number:
+Computes both sub-scores above, then the **combined scalar** leaderboard number.
+With $E$ = `mae_total`, $T$ = `t_cpu_ms_mean`, $T_0$ = `t_floor_ms`:
 
 $$
-S = \log_{10}(\text{mae\_total}) + \alpha \log_{10}\!\bigl(\max(t_{\text{cpu\_ms, mean}},\; T_{\text{floor}})\bigr)
+S \;=\; \log_{10}(E) \,+\, \alpha \cdot \log_{10}(\max(T,\, T_0))
 $$
 
 ```python

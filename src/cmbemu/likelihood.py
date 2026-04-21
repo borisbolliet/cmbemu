@@ -79,7 +79,7 @@ def chi2_matrix_split(
     """Return {"cmb": ..., "pp": ..., "total": cmb+pp}, each (N_data, N_theory).
 
     The CMB block is the 2x2 TT/TE/EE Wishart; PP is the independent 1x1
-    Wishart. These are the natural composability units (see scoring.md).
+    Wishart. These are the natural composability units (see idea.md).
     """
     cmb = _cmb_block(data_cls, theory_cls, lmax_cmb, f_sky)
     pp = _pp_block(data_cls, theory_cls, lmax_pp, f_sky)

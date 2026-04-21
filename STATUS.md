@@ -47,7 +47,7 @@ Covers Planck 2018 to ≥10σ per axis, comfortably inside the ede-v2 emulator t
 - **Scoring implementation verified.** Matmul-vectorized Wishart chi^2 matches brute-force `np.linalg.inv` per-ℓ reference to ~10⁻¹³ relative error on random pairs; exactly 0 on diagonals.
 - **Positive-definiteness confirmed.** $|TE|^2/(TT \cdot EE)$ max is 0.618 on train, 0.610 on test — comfortably below the Cauchy–Schwarz limit. `slogdet` never flips sign.
 - **Plots at dpi=300**: LHC corner, spectra random/envelope/colored-by-param/dispersion, chi^2 PDF+CDF, score scatter. Produced for both `train` / `test` and their `_small` variants.
-- **Docs**: `idea.md`, `data_description.md`, `scoring.md`, `CLAUDE.md`, `STATUS.md`, HF dataset README.
+- **Docs**: `idea.md` (competition pitch + full Wishart / MAE / combined_S derivation — scoring.md was merged in), `data_description.md`, `CLAUDE.md`, `STATUS.md`, HF dataset README.
 
 ## What remains for v0.1 ship
 
