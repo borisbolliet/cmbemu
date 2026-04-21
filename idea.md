@@ -82,34 +82,94 @@ For every ordered pair $(i, j)$ of test-set cosmologies, the scorer treats $C_\e
 
 ## How to run the scorer
 
-One call. That's it.
+The scoring is exposed as **three parallel entry points**, one per piece of the competition score. Use whichever you need:
 
 ```python
 import cmbemu as cec
-
 emu = MyEmulator(weights_path="...")
-result = cec.get_score(emu)
 
-print(f"combined_S : {result['combined_S']:.3f}")
-print(f"precision  : {result['mae_total']['mae']:.3e}")
-print(f"CMB block  : {result['mae_cmb']['mae']:.3e}")
-print(f"PP block   : {result['mae_pp']['mae']:.3e}")
-print(f"t_cpu_ms   : {result['timing']['t_cpu_ms_mean']:.3g}")
+acc  = cec.get_accuracy_score(emu)   # precision only  (~2 s)
+tim  = cec.get_time_score(emu)       # timing only     (~n_calls × per-call ms)
+full = cec.get_score(emu)            # both + combined_S
 ```
 
-`get_score` returns a dict with:
+All three take the same `emulator` object. Under the hood, `get_score` just calls the other two and adds the combined scalar — no independent work.
 
-| Key             | Type   | Meaning |
-|-----------------|--------|---------|
-| `mae_total`     | dict   | Precision on the full likelihood (CMB+PP) |
-| `mae_cmb`       | dict   | Precision restricted to the TT/TE/EE 2×2 Wishart block |
-| `mae_pp`        | dict   | Precision restricted to the φφ block |
-| `timing`        | dict   | `t_cpu_ms_mean`, `t_cpu_ms_median`, `t_cpu_ms_std`, `n_calls`, `n_warmup`, `jax_on_cpu` |
-| `combined_S`    | float  | The headline number you're optimized against |
-| `alpha`         | float  | Tradeoff weight (fixed at 1.0) |
-| `n_test`        | int    | 5000 |
+### `get_accuracy_score(emu, test=None)`
 
-Each `mae_*` entry is `{"mae": ..., "median_abs_diff": ..., "max_abs_diff": ..., "n_pairs": ...}`.
+Returns the **precision half** of the score. Runs `emu.predict` on all 5 000 test cosmologies, computes the Wishart $\chi^2$ matrices, and reports MAE per block. No timing harness.
+
+```python
+acc = cec.get_accuracy_score(emu)
+# {
+#   "mae_total": {"mae": ..., "median_abs_diff": ..., "max_abs_diff": ..., "n_pairs": ...},
+#   "mae_cmb":   {...},   # TT/TE/EE 2x2 Wishart block only
+#   "mae_pp":    {...},   # phi-phi only
+#   "n_test": 5000, "lmax_cmb": 6000, "lmax_pp": 3000,
+# }
+```
+
+**Use this during training** — it's deterministic, has no stochastic timing overhead, and gives you the single knob you can actually optimize against.
+
+### `get_time_score(emu, n_calls=1000, ...)`
+
+Returns the **speed half** of the score. Runs `n_warmup=10` untimed warmup calls, then `n_calls=1000` timed sequential calls with fresh LHC parameters, and reports mean/median/std wall time.
+
+```python
+tim = cec.get_time_score(emu, n_calls=1000, strict_cpu=True)
+# {
+#   "t_cpu_ms_mean":   ...,
+#   "t_cpu_ms_median": ...,
+#   "t_cpu_ms_std":    ...,
+#   "n_calls":  1000,
+#   "n_warmup": 10,
+#   "jax_on_cpu": True,
+# }
+```
+
+**Use this after freezing your model** to verify the inference-speed budget.
+
+### `get_score(emu, alpha=1.0, t_floor_ms=1.0, ...)`
+
+Computes both sub-scores above, then the **combined scalar** leaderboard number:
+
+$$
+S = \log_{10}(\text{mae\_total}) + \alpha \log_{10}\!\bigl(\max(t_{\text{cpu\_ms, mean}},\; T_{\text{floor}})\bigr)
+$$
+
+```python
+full = cec.get_score(emu)
+# {
+#   "mae_total": {...}, "mae_cmb": {...}, "mae_pp": {...},     # from get_accuracy_score
+#   "timing":    {...},                                         # from get_time_score
+#   "combined_S": ...,                                          # the scalar leaderboard entry
+#   "alpha": 1.0, "t_floor_ms": 1.0,
+#   "n_test": 5000, "lmax_cmb": 6000, "lmax_pp": 3000,
+# }
+```
+
+You can verify this by hand:
+
+```python
+acc = cec.get_accuracy_score(emu)
+tim = cec.get_time_score(emu)
+S   = cec.combined_score(acc["mae_total"]["mae"], tim["t_cpu_ms_mean"])
+# S == cec.get_score(emu)["combined_S"]  (up to timing noise across reruns)
+```
+
+### Typical training loop
+
+```python
+for epoch in range(N_EPOCHS):
+    train_step(emu)
+    if epoch % 5 == 0:
+        acc = cec.get_accuracy_score(emu)
+        log(epoch, acc["mae_total"]["mae"])
+
+# once satisfied, measure speed and get the submission number
+final = cec.get_score(emu)
+print(f"submission combined_S = {final['combined_S']:.3f}")
+```
 
 ### CPU pinning for speed timing
 

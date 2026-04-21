@@ -2,7 +2,9 @@
 
 Exposed through ``cmbemu`` as:
     cmbemu.generate_data(n, seed, save_to=...)
-    cmbemu.get_score(emulator, ...)
+    cmbemu.get_accuracy_score(emulator, ...)     # precision only
+    cmbemu.get_time_score(emulator, ...)         # timing only
+    cmbemu.get_score(emulator, ...)              # both + combined_S
 """
 from __future__ import annotations
 
@@ -102,6 +104,90 @@ def _predict_on_test(emulator: EmulatorProtocol, test: dict) -> dict[str, np.nda
     return emu
 
 
+def get_accuracy_score(
+    emulator: EmulatorProtocol,
+    test: dict | None = None,
+) -> dict[str, Any]:
+    """Precision component of the competition score (no timing).
+
+    Runs the emulator on every test parameter point, computes the Wishart
+    chi^2 matrices (total + CMB block + PP block), and returns the MAE on
+    Delta chi^2 for each. Fast and deterministic: call this on every
+    training epoch.
+
+    Parameters
+    ----------
+    emulator : object with a ``predict(params: dict) -> dict`` method.
+    test : a test-set dict as returned by ``load_test``. If None, the
+        default test set is downloaded via ``load_test``.
+
+    Returns
+    -------
+    dict with keys:
+        "mae_total" / "mae_cmb" / "mae_pp" : dicts with mae, median_abs_diff,
+            max_abs_diff, n_pairs.
+        "n_test", "lmax_cmb", "lmax_pp" : metadata.
+    """
+    if test is None:
+        from .data import load_test
+        test = load_test()
+
+    emu_cls = _predict_on_test(emulator, test)
+
+    split_true = chi2_matrix_split(test, test,
+                                   lmax_cmb=test["lmax_cmb"],
+                                   lmax_pp=test["lmax_pp"])
+    split_emu = chi2_matrix_split(test, emu_cls,
+                                  lmax_cmb=test["lmax_cmb"],
+                                  lmax_pp=test["lmax_pp"])
+    maes = chi2_mae_blocks(split_true, split_emu)
+
+    return {
+        "mae_total": maes["total"],
+        "mae_cmb": maes["cmb"],
+        "mae_pp": maes["pp"],
+        "n_test": int(test["params"].shape[0]),
+        "lmax_cmb": int(test["lmax_cmb"]),
+        "lmax_pp": int(test["lmax_pp"]),
+    }
+
+
+def get_time_score(
+    emulator: EmulatorProtocol,
+    n_calls: int = 1000,
+    n_warmup: int = 10,
+    seed: int = 0,
+    strict_cpu: bool = False,
+) -> dict[str, Any]:
+    """Speed component of the competition score (no precision work).
+
+    Runs ``n_warmup`` untimed calls then ``n_calls`` timed sequential calls
+    through ``emulator.predict`` with fresh LHC parameters. Returns the
+    ``TimingResult`` contents as a plain dict.
+
+    Pin JAX/TF to CPU before importing the emulator for a faithful MCMC
+    benchmark:
+
+        export JAX_PLATFORMS=cpu
+        export CUDA_VISIBLE_DEVICES=
+
+    Pass ``strict_cpu=True`` to raise on non-CPU JAX backends instead of
+    warning.
+
+    Returns
+    -------
+    dict with keys:
+        "t_cpu_ms_mean", "t_cpu_ms_median", "t_cpu_ms_std",
+        "n_calls", "n_warmup", "jax_on_cpu".
+    """
+    timing = benchmark_emulator(emulator,
+                                n_calls=n_calls,
+                                n_warmup=n_warmup,
+                                seed=seed,
+                                strict_cpu=strict_cpu)
+    return asdict(timing)
+
+
 def get_score(
     emulator: EmulatorProtocol,
     test: dict | None = None,
@@ -113,7 +199,12 @@ def get_score(
     measure_timing: bool = True,
     strict_cpu: bool = False,
 ) -> dict[str, Any]:
-    """Run the full scorer on an emulator.
+    """Run the full scorer on an emulator (precision + timing + combined).
+
+    Thin wrapper around ``get_accuracy_score`` + ``get_time_score`` that also
+    returns the combined score
+
+        combined_S = log10(mae_total) + alpha * log10(max(t_cpu_ms, t_floor_ms)).
 
     Parameters
     ----------
@@ -131,53 +222,29 @@ def get_score(
     Returns
     -------
     dict with keys:
-        "mae_total" / "mae_cmb" / "mae_pp" : dicts from chi2_mae_blocks
-        "timing"    : TimingResult as a dict (or None)
-        "combined_S": log10(mae_total) + alpha * log10(t_cpu_ms) (or None)
-        "alpha"     : tradeoff used
-        "n_test"    : N_test
+        "mae_total" / "mae_cmb" / "mae_pp"   : precision sub-scores
+        "timing"                             : timing dict (or None)
+        "combined_S"                         : float (or None)
+        "alpha", "t_floor_ms"                : score hyper-parameters used
+        "n_test", "lmax_cmb", "lmax_pp"      : dataset metadata
     """
-    if test is None:
-        from .data import load_test
-        test = load_test()
+    acc = get_accuracy_score(emulator, test=test)
 
-    # 1) Emulator predictions on every test parameter point
-    emu_cls = _predict_on_test(emulator, test)
-
-    # 2) True and emu chi^2 matrices, split into cmb / pp blocks
-    split_true = chi2_matrix_split(test, test,
-                                   lmax_cmb=test["lmax_cmb"],
-                                   lmax_pp=test["lmax_pp"])
-    split_emu = chi2_matrix_split(test, emu_cls,
-                                  lmax_cmb=test["lmax_cmb"],
-                                  lmax_pp=test["lmax_pp"])
-
-    # 3) MAE per block (no cut)
-    maes = chi2_mae_blocks(split_true, split_emu)
-
-    # 4) CPU timing (optional)
     timing = None
-    if measure_timing:
-        timing = benchmark_emulator(emulator,
-                                    n_calls=n_timing_calls,
-                                    n_warmup=n_timing_warmup,
-                                    seed=timing_seed,
-                                    strict_cpu=strict_cpu)
-
-    # 5) Combined score
     S = None
-    if timing is not None:
-        S = combined_score(maes["total"]["mae"], timing.t_cpu_ms_mean,
+    if measure_timing:
+        timing = get_time_score(emulator,
+                                n_calls=n_timing_calls,
+                                n_warmup=n_timing_warmup,
+                                seed=timing_seed,
+                                strict_cpu=strict_cpu)
+        S = combined_score(acc["mae_total"]["mae"], timing["t_cpu_ms_mean"],
                            alpha=alpha, t_floor_ms=t_floor_ms)
 
     return {
-        "mae_total": maes["total"],
-        "mae_cmb": maes["cmb"],
-        "mae_pp": maes["pp"],
-        "timing": asdict(timing) if timing is not None else None,
+        **acc,
+        "timing": timing,
         "combined_S": S,
         "alpha": alpha,
-        "n_test": int(test["params"].shape[0]),
-        "lmax_cmb": int(test["lmax_cmb"]),
-        "lmax_pp": int(test["lmax_pp"]),
+        "t_floor_ms": t_floor_ms,
     }

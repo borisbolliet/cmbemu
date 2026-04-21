@@ -10,48 +10,114 @@ Wishart-likelihood scoring, and a CPU timing harness built on
 pip install cmbemu
 ```
 
+Requires Python ≥ 3.12.
+
 ## Quickstart
 
 ```python
 import cmbemu as cec
 
-# (1) Fetch the pre-generated datasets (cached under ~/.cache/cmbemu)
+# 1. Fetch the competition data (cached under ~/.cache/cmbemu)
 train = cec.load_train()
 test  = cec.load_test()
 
-# (2) Optionally generate more spectra to study data-scaling
-extra = cec.generate_data(n=20_000, seed=42, save_to="extra.npz")
-
-# (3) Define your emulator
+# 2. Define your emulator: any object exposing predict(dict) -> dict
 class MyEmulator:
-    def predict(self, params: dict) -> dict:
-        # params has keys: omega_b, omega_cdm, H0, tau_reio,
-        # ln10^{10}A_s, n_s.
-        # Returns a dict with keys tt, te, ee (len lmax_cmb+1)
-        # and pp (len lmax_pp+1).
+    def predict(self, params: dict):
+        # params keys: omega_b, omega_cdm, H0, tau_reio, ln10^{10}A_s, n_s
+        # return dict with keys tt/te/ee (len 6001) and pp (len 3001)
         ...
 
-# (4) Score
-result = cec.get_score(MyEmulator())
-print(result["combined_S"], result["mae_total"]["mae"], result["timing"]["t_cpu_ms_mean"])
+emu = MyEmulator()
+
+# 3. Score it
+result = cec.get_score(emu)
+print(result["combined_S"], result["mae_total"]["mae"])
 ```
 
-See `scoring.md` for the full likelihood and score definitions.
+See [`idea.md`](idea.md) for the competition rules and
+[`data_description.md`](data_description.md) for the dataset schema.
 
-## Hardware note
+## The scoring API
 
-Timing is done **CPU-only**, single-threaded warm sequential calls — this
-mimics how an emulator is used inside a typical MCMC chain. Before running
-`get_score` with `strict_cpu=True`, export:
+Three parallel entry points, one per component of the score:
+
+| Function                | Returns                               | Cost per call          | When to use |
+|-------------------------|---------------------------------------|------------------------|-------------|
+| `get_accuracy_score`    | `mae_total`, `mae_cmb`, `mae_pp`      | ~2 s (run emulator on the 5 000 test points) | every training epoch |
+| `get_time_score`        | `t_cpu_ms_mean/median/std`, ...       | ~`n_calls × per-call ms` | after the model is frozen |
+| `get_score`             | both of the above **plus** `combined_S` | sum of the two         | at submission time |
+
+```python
+acc  = cec.get_accuracy_score(emu)       # precision only
+tim  = cec.get_time_score(emu)           # timing only
+full = cec.get_score(emu)                # both + combined_S
+```
+
+### What `combined_S` is
+
+The single scalar leaderboard number:
+
+$$
+S = \log_{10}(\texttt{mae\_total}) + \alpha \cdot \log_{10}\!\bigl(\max(t_{\text{cpu\_ms, mean}},\; T_{\text{floor}})\bigr)
+$$
+
+with defaults $\alpha = 1.0$ and $T_{\text{floor}} = 1$ ms. Lower is better.
+Above the floor, one decade of precision trades for one decade of speed;
+sub-millisecond inference buys no further credit (MCMC per-step overhead
+dominates below that scale).
+
+Precision and speed are cleanly decomposed: you can recompute `combined_S`
+from the two sub-scores yourself:
+
+```python
+acc = cec.get_accuracy_score(emu)
+tim = cec.get_time_score(emu)
+S   = cec.combined_score(acc["mae_total"]["mae"], tim["t_cpu_ms_mean"])
+# S == cec.get_score(emu)["combined_S"]  (up to timing noise across reruns)
+```
+
+See [`scoring.md`](scoring.md) for the full Wishart likelihood derivation.
+
+## CPU timing setup
+
+Timing is done CPU-only, single-threaded, warm, with fresh parameters at
+every call (no result caching possible). Before importing your emulator:
 
 ```bash
 export JAX_PLATFORMS=cpu
 export CUDA_VISIBLE_DEVICES=
 ```
 
+Pass `strict_cpu=True` to `get_time_score` / `get_score` to make the check a
+hard failure rather than a warning.
+
+## Generate more data (optional)
+
+Want to study how your architecture's precision scales with $N_\text{train}$?
+Draw more cosmologies from the same prior:
+
+```python
+extra = cec.generate_data(n=20_000, seed=42, save_to="extra.npz")
+```
+
+## Baselines
+
+Two trivial emulators ship with the package for sanity checks:
+
+```python
+emu1 = cec.ConstantPlanck()                    # always returns Planck fiducial
+emu2 = cec.NearestNeighbour(cec.load_train())  # 1-NN lookup on training set
+```
+
+Expected `ConstantPlanck` → `combined_S ≈ 7.05` on the full test set. Any
+real emulator should beat this on precision by many decades.
+
 ## Project layout
 
 - `src/cmbemu/` — the installable package
-- `scripts/` — internal dataset-building and diagnostic scripts
-- `scoring.md` — formal score definition
+- `scripts/` — internal dataset-building and diagnostic tools
+- `idea.md` — competition pitch
+- `data_description.md` — dataset schema + loading patterns
+- `scoring.md` — Wishart likelihood + combined score definition
 - `STATUS.md` — current state of the competition design

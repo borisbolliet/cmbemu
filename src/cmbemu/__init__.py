@@ -36,7 +36,7 @@ from .lhc import sample_lhc
 
 # Data loading / regeneration (import api last — it pulls in generate + data)
 from .data import download_data, load_test, load_train
-from .api import generate_data, get_score
+from .api import generate_data, get_accuracy_score, get_score, get_time_score
 
 # Likelihood + scoring primitives (exposed for advanced users)
 from .likelihood import chi2_diag, chi2_matrix
@@ -57,7 +57,8 @@ __all__ = [
     "sample_lhc",
     # data
     "download_data", "load_train", "load_test",
-    "generate_data", "get_score",
+    "generate_data",
+    "get_accuracy_score", "get_time_score", "get_score",
     # scoring primitives
     "chi2_matrix", "chi2_diag", "chi2_mae", "combined_score",
     # baselines
