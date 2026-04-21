@@ -43,7 +43,7 @@ STATUS.md              current state & remaining work
 
 ## Environment
 
-- `emucomp/` venv (Python 3.12.12). Activate with `source emucomp/bin/activate`.
+- `emucomp/` venv (Python 3.12.12). Activate with `source emucomp/bin/activate`. The package targets **Python 3.12 only** (`requires-python = ">=3.12"`).
 - `cmbemu` installed editable (`pip install -e .`); full deps in `pyproject.toml`.
 - **`HF_TOKEN` lives in `.env`** (gitignored). `scripts/upload_dataset.py` reads it.
 

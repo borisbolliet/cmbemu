@@ -7,10 +7,11 @@ name = "cmbemu"
 version = "0.1.0a1"
 description = "CMB-spectrum emulator competition: pre-generated training data, Wishart-likelihood scoring, and CPU timing harness built on classy_szfast."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = "MIT"
 authors = [
     { name = "Boris Bolliet", email = "boris.bolliet@gmail.com" },
+    { name = "Vivian Poulin" },
 ]
 keywords = ["cosmology", "CMB", "emulator", "benchmark", "jax"]
 classifiers = [
@@ -19,7 +20,6 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Astronomy",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "License :: OSI Approved :: MIT License",
 ]
