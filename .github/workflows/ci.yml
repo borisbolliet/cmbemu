@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Fast gate: lint, import, build the wheel. Skips classy_sz install.
+  lint-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install lint + build deps
+        run: |
+          pip install --upgrade pip
+          pip install ruff build
+
+      - name: Ruff
+        run: ruff check src/
+
+      - name: Import without heavy deps
+        # Install without any classy_sz / jax / tensorflow to prove the
+        # top-level import is side-effect-free.
+        run: |
+          pip install --no-deps -e .
+          pip install numpy scipy huggingface_hub tqdm
+          python -c "import cmbemu; print('cmbemu', cmbemu.__version__)"
+
+      - name: Build sdist + wheel
+        run: python -m build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  # Full install + smoke test. Slower because classy_sz pulls tensorflow.
+  smoke-test:
+    runs-on: ubuntu-latest
+    needs: lint-and-build
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install cmbemu with full deps
+        run: |
+          pip install --upgrade pip
+          pip install -e .
+
+      - name: Import check + CLI help
+        run: |
+          python -c "import cmbemu as cec; print(cec.__version__); print(cec.PARAM_NAMES)"
+          cmbemu --help
+
+      # Heavy scoring smoke test: download test_small (~38 MB) from HF and
+      # run ConstantPlanck end-to-end. Skip if the HF repo is unreachable.
+      - name: Score ConstantPlanck on test_small
+        continue-on-error: true
+        run: |
+          python -c "
+          import cmbemu as cec
+          test = cec.load_test(size='small')
+          emu = cec.ConstantPlanck(lmax_cmb=test['lmax_cmb'], lmax_pp=test['lmax_pp'])
+          result = cec.get_score(emu, test=test, n_timing_calls=50)
+          assert result['mae_total']['mae'] > 1e6, 'unexpectedly small MAE for constant-Planck'
+          print('mae_total', result['mae_total']['mae'])
+          print('combined_S', result['combined_S'])
+          "

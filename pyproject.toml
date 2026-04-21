@@ -1,0 +1,65 @@
+[build-system]
+requires = ["hatchling>=1.18"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cmbemu"
+version = "0.1.0a1"
+description = "CMB-spectrum emulator competition: pre-generated training data, Wishart-likelihood scoring, and CPU timing harness built on classy_szfast."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [
+    { name = "Boris Bolliet", email = "boris.bolliet@gmail.com" },
+]
+keywords = ["cosmology", "CMB", "emulator", "benchmark", "jax"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Astronomy",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+]
+
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.12",
+    "matplotlib>=3.8",
+    "huggingface_hub>=0.23",
+    "classy_sz>=0.1.70",
+    "jax>=0.4.30",
+    "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+gpu = [
+    "jax[cuda12]>=0.4.30",
+]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+cmbemu = "cmbemu.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/borisbolliet/cmbemu"
+Repository = "https://github.com/borisbolliet/cmbemu"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cmbemu"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/cmbemu",
+    "README.md",
+    "pyproject.toml",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
