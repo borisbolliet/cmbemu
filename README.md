@@ -75,7 +75,6 @@ from the two sub-scores yourself:
 acc = cec.get_accuracy_score(emu)
 tim = cec.get_time_score(emu)
 S   = cec.combined_score(acc["mae_total"]["mae"], tim["t_cpu_ms_mean"])
-# S == cec.get_score(emu)["combined_S"]  (up to timing noise across reruns)
 ```
 
 See [`idea.md`](idea.md#scoring) for the full Wishart derivation, block

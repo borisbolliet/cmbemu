@@ -273,14 +273,18 @@ full = cec.get_score(emu)
 # }
 ```
 
-You can verify this by hand:
+The same scalar can be recomposed from the two sub-scores. Calling
+`get_score` is equivalent to running `get_accuracy_score` and
+`get_time_score` and then this one line:
 
 ```python
 acc = cec.get_accuracy_score(emu)
 tim = cec.get_time_score(emu)
 S   = cec.combined_score(acc["mae_total"]["mae"], tim["t_cpu_ms_mean"])
-# S == cec.get_score(emu)["combined_S"]  (up to timing noise across reruns)
 ```
+
+(Running both paths on the same model gives the same `S` up to timing
+jitter across the two independent benchmark runs.)
 
 ### Typical training loop
 
