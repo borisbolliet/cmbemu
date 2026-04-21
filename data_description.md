@@ -1,187 +1,152 @@
 # Data description
 
-This document describes the dataset distributed with the `cmbemu` competition: what is in it, how to load it, how to generate more of it if you want to study data-scaling, and how to score an emulator against it.
-
-Everything here is reproducible from the `cmbemu` Python package (`pip install cmbemu`). The raw files live on the Hugging Face Hub at
-[`borisbolliet/cmbemu-competition-v1`](https://huggingface.co/datasets/borisbolliet/cmbemu-competition-v1) and are cached locally under `~/.cache/cmbemu/` on first use.
+Everything you need to know about the competition dataset: what is on disk, what each array means, and how to load it. Assumes you have already run `pip install cmbemu` and that the data is available through `cmbemu.load_train()` / `cmbemu.load_test()`.
 
 ## Files
 
-| File              | N      | Size (float32)  | Purpose                              |
-|-------------------|:------:|:---------------:|--------------------------------------|
-| `train.npz`       | 50 000 | ~3.95 GB        | Training set for emulator authors    |
-| `test.npz`        |  5 000 | ~0.38 GB        | Held-out scoring test set            |
-| `train_small.npz` |  5 000 | ~0.38 GB        | Dev-loop training set                |
-| `test_small.npz`  |    500 | ~38 MB          | Dev-loop test set                    |
+The competition ships four `.npz` files. The full dataset is the one to use for real training and scoring; the `*_small` variants exist so you can iterate on a training script without loading 4 GB into memory.
 
-All four files share the same schema. The `*_small` variants exist purely so you can iterate on your training script without pulling 4 GB.
+| File              | N      | Size (float32) | Purpose                             |
+|-------------------|:------:|:--------------:|-------------------------------------|
+| `train.npz`       | 50 000 | ~4 GB          | Training set                        |
+| `test.npz`        |  5 000 | ~0.4 GB        | Held-out scoring test set           |
+| `train_small.npz` |  5 000 | ~0.4 GB        | Dev-loop training set               |
+| `test_small.npz`  |    500 | ~40 MB         | Dev-loop test set                   |
 
-## Schema
-
-Each `.npz` contains the following arrays:
-
-| Key                 | Shape              | dtype    | Description                                                        |
-|---------------------|--------------------|:--------:|--------------------------------------------------------------------|
-| `params`            | (N, 6)             | float32  | LHC points in physical units                                       |
-| `param_names`       | (6,)               | str      | Ordering of the parameter columns                                  |
-| `tt`                | (N, 6001)          | float32  | $C_\ell^{TT}$ for $\ell \in [0, 6000]$ (same convention as `te`, `ee`) |
-| `te`                | (N, 6001)          | float32  | $C_\ell^{TE}$                                                      |
-| `ee`                | (N, 6001)          | float32  | $C_\ell^{EE}$                                                      |
-| `pp`                | (N, 3001)          | float32  | $C_\ell^{\phi\phi}$ for $\ell \in [0, 3000]$                      |
-| `box_lo`, `box_hi`  | (6,)               | float32  | Competition box bounds                                             |
-| `lmax_cmb`, `lmax_pp` | ()               | int32    | 6000, 3000                                                         |
-| `cosmo_model`       | ()                 | int32    | 6 (= `ede-v2` in `classy_szfast`)                                  |
-| `classy_sz_version` | ()                 | str      | Exact generator version                                            |
-| `seed`              | ()                 | int64    | RNG seed used for the LHC                                          |
-
-### Conventions
-
-- `params` columns are ordered as `("omega_b", "omega_cdm", "H0", "tau_reio", "ln10^{10}A_s", "n_s")`. This ordering is authoritative; use `cmbemu.PARAM_NAMES` rather than hard-coding it.
-- All $\ell$-indexed arrays start at $\ell = 0$; the monopole and dipole are kept for convenience but are ignored by the likelihood — slice from $\ell = 2$ when scoring.
-- Spectra are in whatever units `classy_szfast` returns (SI, $C_\ell$ as is, not $D_\ell$). **This does not matter for the likelihood**, which is unit-invariant; see [`scoring.md`](scoring.md).
+All four share an identical schema.
 
 ## Loading
 
-### High-level API
+### The one-liners
 
 ```python
 import cmbemu as cec
 
-train = cec.load_train()   # downloads + caches on first call
-test  = cec.load_test()
+train = cec.load_train()          # full 50 000-point training set
+test  = cec.load_test()           # full 5 000-point test set
 
-N = train["params"].shape[0]     # 50000
-lmax_cmb = train["lmax_cmb"]     # 6000
-tt = train["tt"]                 # (N, lmax_cmb+1) float32
-params = train["params"]         # (N, 6)  float32
-```
-
-For the dev subsets, pass `size="small"`:
-
-```python
 train_small = cec.load_train(size="small")
 test_small  = cec.load_test(size="small")
 ```
 
+Each call returns a plain dict of typed numpy arrays.
+
 ### Direct `numpy.load`
 
-If you want to inspect the file without the `cmbemu` package:
+You don't need `cmbemu` to read the files:
 
 ```python
 import numpy as np
-with np.load("train.npz", allow_pickle=False) as z:
-    params = z["params"]
+
+with np.load("test.npz", allow_pickle=False) as z:
+    params = z["params"]          # (N, 6)
     tt, te, ee = z["tt"], z["te"], z["ee"]
     pp = z["pp"]
-    param_names = [str(s) for s in z["param_names"]]
-    cosmo_model = int(z["cosmo_model"])
+    param_names = tuple(str(s) for s in z["param_names"])
+    lmax_cmb = int(z["lmax_cmb"])
+    lmax_pp  = int(z["lmax_pp"])
 ```
 
-## Parameter box
+## Schema
 
-The Latin-hypercube covers Planck 2018 to ≥10σ on every axis, well inside the `classy_szfast` ede-v2 emulator validity region:
+Every file contains:
 
-| Parameter    | Min    | Max    |
-|--------------|:------:|:------:|
-| ω_b          | 0.020  | 0.025  |
-| ω_cdm        | 0.09   | 0.15   |
-| H₀           | 55     | 85     |
-| τ            | 0.03   | 0.10   |
-| ln 10¹⁰ A_s  | 2.7    | 3.3    |
-| n_s          | 0.92   | 1.02   |
+| Key                 | Shape              | dtype    | Description                                                     |
+|---------------------|--------------------|:--------:|-----------------------------------------------------------------|
+| `params`            | (N, 6)             | float32  | LHC points in physical units                                    |
+| `param_names`       | (6,)               | str      | Canonical ordering of the parameter columns                     |
+| `tt`                | (N, 6001)          | float32  | $C_\ell^{TT}$ for $\ell \in [0, 6000]$                          |
+| `te`                | (N, 6001)          | float32  | $C_\ell^{TE}$                                                   |
+| `ee`                | (N, 6001)          | float32  | $C_\ell^{EE}$                                                   |
+| `pp`                | (N, 3001)          | float32  | $C_\ell^{\phi\phi}$ for $\ell \in [0, 3000]$                    |
+| `box_lo`, `box_hi`  | (6,)               | float32  | Parameter box bounds (matches the Parameter prior table below)  |
+| `lmax_cmb`          | ()                 | int32    | 6000                                                            |
+| `lmax_pp`           | ()                 | int32    | 3000                                                            |
+| `seed`              | ()                 | int64    | RNG seed used for the LHC                                       |
 
-Each LHC point is a single cosmology; the corresponding spectrum rows in `tt`, `te`, `ee`, `pp` share an index.
+Key `i` of every array corresponds to the same cosmology: `params[i]` is the parameter vector, and `tt[i]`, `te[i]`, `ee[i]`, `pp[i]` are its four spectra.
 
-## Generating more data
+## Parameter columns
 
-Participants are encouraged to study how emulator precision scales with $N_\text{train}$. The `cmbemu.generate_data` helper produces fresh spectra from the same LHC prior:
+`params` rows are ordered exactly as in `param_names`. Use `cmbemu.PARAM_NAMES` (which is the same tuple) rather than hard-coding indices:
+
+```python
+>>> cmbemu.PARAM_NAMES
+('omega_b', 'omega_cdm', 'H0', 'tau_reio', 'ln10^{10}A_s', 'n_s')
+```
+
+Conversion between a parameter row and the `dict` your emulator sees:
+
+```python
+from cmbemu import PARAM_NAMES, params_array_to_dict
+
+p_dict = params_array_to_dict(params[i])
+# {"omega_b": ..., "omega_cdm": ..., "H0": ..., "tau_reio": ...,
+#  "ln10^{10}A_s": ..., "n_s": ...}
+```
+
+## Parameter prior
+
+Latin-hypercube sampled. Every training and testing cosmology lies strictly inside this 6-D box:
+
+| Parameter     | Min    | Max    |
+|---------------|:------:|:------:|
+| ω_b           | 0.020  | 0.025  |
+| ω_cdm         | 0.09   | 0.15   |
+| H₀            | 55     | 85     |
+| τ             | 0.03   | 0.10   |
+| ln 10¹⁰ A_s   | 2.7    | 3.3    |
+| n_s           | 0.92   | 1.02   |
+
+Your emulator only needs to be accurate inside this box. Nothing in the scorer will query it outside these bounds.
+
+## Multipole conventions
+
+All spectrum arrays are indexed by $\ell$, **starting at $\ell = 0$**:
+
+- `tt[i, ell]`, `te[i, ell]`, `ee[i, ell]` are defined for $\ell \in [0, 6000]$ (length 6001).
+- `pp[i, ell]` is defined for $\ell \in [0, 3000]$ (length 3001).
+
+The $\ell = 0$ and $\ell = 1$ entries are included for convenience but are ignored everywhere in the scoring — the Wishart likelihood starts at $\ell = 2$. Keep them in your emulator's output; the scorer slices them off.
+
+$C_\ell$ units are whatever convention was used to generate the data (SI, $C_\ell$ as is, not $D_\ell$). **This does not affect the score**: the Wishart likelihood is invariant under any consistent rescaling of $C_\ell$ (the 2×2 Wishart `Tr(C_d C_t^{-1})` and `log det` both cancel scale factors), so your emulator may emit $C_\ell$, $D_\ell = \ell(\ell+1)C_\ell/(2\pi)$, or anything else, as long as it applies the same convention for every sample and every multipole.
+
+## Size reference
+
+Just so you know what fits where:
+
+- `train.npz`: 4.0 GB on disk, 6.3 GB in memory (all four spectra, float32).
+  - `params`: 1.2 MB
+  - `tt`/`te`/`ee`: 1.2 GB each (50 000 × 6001 × 4 bytes)
+  - `pp`: 0.6 GB
+- `test.npz`: 0.4 GB on disk, 0.6 GB in memory.
+- The $5000 \times 5000$ scoring chi² matrix allocated during `get_score` is another 0.2 GB (float64). Peak RAM while scoring is ~2 GB — fits comfortably in a 16 GB laptop.
+
+## Generating more data (optional)
+
+The training and test sets released here are fixed; you should not extend the test set. But if you want to study how your architecture's precision scales with $N_\text{train}$, you can draw additional cosmologies from the same prior:
 
 ```python
 extra = cec.generate_data(
     n=20_000,
-    seed=42,                    # any seed; pick something not in {202604, 202605}
+    seed=42,                    # any integer not in {202604, 202605}
     save_to="extra_20k.npz",
 )
 ```
 
-The output dict has the same schema as `train.npz` / `test.npz`. Generation is single-process, ~5 ms per spectrum on recent Apple Silicon / Ryzen CPUs — 20 k spectra is ~2 minutes. The script is not resumable; for very large runs we recommend splitting into multiple invocations with distinct seeds and concatenating arrays afterwards.
+The returned dict has the same schema, and the saved `.npz` can be loaded with `numpy.load` or merged into your training pipeline. Seeds `202604` and `202605` are reserved for the train and test sets; using either of them would reproduce the released data exactly, which is not what you want.
 
-**Never** regenerate using a seed in `{202604, 202605}` — those are the train/test seeds and would reproduce the held-out test set.
+## Sanity check
 
-## Computing the likelihood
-
-The competition uses the CV-limited, full-sky Wishart log-likelihood — see [`scoring.md`](scoring.md) for the formula and its derivation. In code:
-
-```python
-from cmbemu.likelihood import chi2_matrix_split, chi2_matrix, chi2_diag
-
-# All NxN pairs, split into CMB (TT/TE/EE 2x2 Wishart) and PP (1x1)
-split = chi2_matrix_split(data_cls=test, theory_cls=test)
-chi2_cmb   = split["cmb"]      # (N, N)
-chi2_pp    = split["pp"]       # (N, N)
-chi2_total = split["total"]    # cmb + pp
-
-# Shortcut that returns only the total
-chi2 = chi2_matrix(data_cls=test, theory_cls=test)
-
-# Diagonal only (self-chi2 when theory == data): useful as a cheap diagnostic.
-# By construction chi2_diag(d, d) ~ 0 (float64 roundoff only).
-diag = chi2_diag(test, test)
-```
-
-Arguments default to `lmax_cmb=6000`, `lmax_pp=3000`, `f_sky=1.0` — matching the dataset.
-
-## Scoring an emulator end-to-end
-
-The full scorer:
-
-```python
-class MyEmulator:
-    def predict(self, params: dict) -> dict:
-        return {"tt": ..., "te": ..., "ee": ..., "pp": ...}
-
-result = cec.get_score(MyEmulator())
-# Returns:
-#   {"mae_total": {"mae": ..., "median_abs_diff": ..., "max_abs_diff": ..., "n_pairs": ...},
-#    "mae_cmb":   {...},   # TT/TE/EE 2x2 Wishart block only
-#    "mae_pp":    {...},   # phi-phi only
-#    "timing":    {"t_cpu_ms_mean": ..., "t_cpu_ms_median": ..., ...} | None,
-#    "combined_S": ... | None,
-#    "alpha": 1.0, "n_test": 5000, ...}
-```
-
-The precision block runs in O(seconds) — we vectorize the likelihood across `(i, j, ℓ)` via BLAS matmul — so scoring a new emulator is dominated by the time it takes to call `emulator.predict` 5 000 times, plus the timing harness (1 000 warm sequential calls by default). On a typical laptop the whole call completes in under a minute.
-
-### Measuring speed honestly
-
-Timing is done CPU-only, single-threaded, warm, with fresh LHC parameters at every call. Set these before importing your emulator:
-
-```bash
-export JAX_PLATFORMS=cpu
-export CUDA_VISIBLE_DEVICES=
-```
-
-Pass `strict_cpu=True` to `cec.get_score` to make this a hard requirement rather than a warning.
-
-## Minimal working example
+Once your install is working, this 6-line script confirms the dataset is reachable and the scoring interface is live:
 
 ```python
 import cmbemu as cec
-
-# 1) get the test set (downloaded on first call)
 test = cec.load_test()
-
-# 2) a trivial reference emulator
-emu = cec.ConstantPlanck(lmax_cmb=test["lmax_cmb"], lmax_pp=test["lmax_pp"])
-
-# 3) score it
-result = cec.get_score(emu, test=test, n_timing_calls=200)
-
-print(f"mae_total  : {result['mae_total']['mae']:.3e}")
-print(f"mae_cmb    : {result['mae_cmb']['mae']:.3e}")
-print(f"mae_pp     : {result['mae_pp']['mae']:.3e}")
-print(f"t_cpu_ms   : {result['timing']['t_cpu_ms_mean']:.4g}")
-print(f"combined_S : {result['combined_S']:.3f}")
+emu  = cec.ConstantPlanck(lmax_cmb=test["lmax_cmb"], lmax_pp=test["lmax_pp"])
+result = cec.get_score(emu, test=test)
+print(result["combined_S"], result["mae_total"]["mae"])
+# Expect combined_S ~ 4.2, mae_total ~ 1.13e7
 ```
 
-Expected numbers on the full 5 000-point test set: `mae_total ≈ 1.13e7`, `t_cpu_ms ≈ 1.5e-3` (ConstantPlanck is essentially a dict copy), `combined_S ≈ 4.23`. Any real emulator should beat this floor on precision.
+If those numbers come out close to the expected values, you're ready to swap in a real emulator.

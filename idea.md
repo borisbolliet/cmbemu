@@ -1,91 +1,213 @@
 # cmbemu — Emulator Competition
 
-## Goal
+## The task
 
-Build neural-network emulators of the four CMB angular power spectra — **TT**, **TE**, **EE**, and lensing-potential **φφ** — that are simultaneously **precise** (matching `classy_szfast` ground truth to high accuracy) and **fast** (sub-millisecond `predict()` on CPU, to be usable inside MCMC chains). Both axes are scored; see [`scoring.md`](scoring.md) for the formal definition.
+Train a neural-network emulator of the four CMB angular power spectra — **TT**, **TE**, **EE**, and lensing-potential **φφ** — as a function of six ΛCDM cosmological parameters. Optimize for **both** precision (how close your spectra are to the reference at the likelihood level) **and** CPU inference speed (sub-ms `predict()` calls are the realistic target for use inside an MCMC chain).
 
-## Motivation
+You will be scored by a single function call — `cmbemu.get_score(emulator)` — which returns a precision number, a CPU timing number, and a combined score. All three are computed on a held-out 5 000-point test set that ships with the competition data.
 
-MCMC inference on CMB data is bottlenecked by Boltzmann solvers. Emulators deliver 10³–10⁶× speedups while preserving parameter-level accuracy, and have become the de facto tool for large cosmological likelihood codes (CosmoPowerJAX, classy_szfast, etc.). But the community lacks a common benchmark against which different architectures and training strategies can be compared apples-to-apples. This competition fills that gap:
+## Inputs and outputs
 
-- **Fixed dataset.** 50k training + 5k testing spectra drawn from the same Latin-hypercube, generated identically with `classy_szfast` (cosmo_model=6, ede-v2 stack in near-LCDM configuration). Pre-hosted on Hugging Face.
-- **Fixed evaluation.** Pairwise Wishart $\chi^2$ MAE + single-CPU warm-call timing. No ambiguity about what "good" means.
-- **Fixed hardware envelope.** Training on GPU; scoring on 1 CPU of the 64-CPU reference container.
+### Input to your emulator
 
-## Parameter prior
+A Python dict with six keys, in physical units:
 
-Six LCDM parameters, Latin-hypercube sampled inside a box that covers Planck 2018 to ≥10σ on every axis while staying well inside the `classy_szfast` ede-v2 emulator validity region:
+```python
+{
+    "omega_b":       float,   # Ω_b h²
+    "omega_cdm":     float,   # Ω_cdm h²
+    "H0":            float,   # km/s/Mpc
+    "tau_reio":      float,
+    "ln10^{10}A_s":  float,
+    "n_s":           float,
+}
+```
 
-| Parameter        | Min    | Max    |
-|------------------|:------:|:------:|
-| ω_b              | 0.020  | 0.025  |
-| ω_cdm            | 0.09   | 0.15   |
-| H₀               | 55     | 85     |
-| τ                | 0.03   | 0.10   |
-| ln 10¹⁰ A_s      | 2.7    | 3.3    |
-| n_s              | 0.92   | 1.02   |
+Use `cmbemu.PARAM_NAMES` as the canonical ordering (same order as the rows above).
 
-## Scoring (summary)
+### Output from your emulator
 
-For each ordered pair $(i, j)$ of test points, treat $C_\ell^{\text{true}}(\theta_i)$ as mock CV-limited data and compute the Wishart log-likelihood with theory = emulator or theory = ground truth. The primary precision score is the **MAE on $\Delta\chi^2$** across all off-diagonal pairs (no cut, absolute-likelihood-level matching).
+A Python dict with four keys, each a `numpy.ndarray`:
 
-Combined score:
+```python
+{
+    "tt": array of shape (6001,),   # ell = 0, 1, ..., 6000
+    "te": array of shape (6001,),
+    "ee": array of shape (6001,),
+    "pp": array of shape (3001,),   # ell = 0, 1, ..., 3000
+}
+```
 
-$$
-S \;=\; \log_{10}(\text{MAE on } \Delta\chi^2)
-\;+\; \alpha \, \log_{10}(T_{\text{CPU, ms}}),\qquad \alpha = 1.
-$$
+Shapes and ordering are fixed. `ell=0, 1` entries must be present but are ignored by the scorer — slice them to zero if convenient. Units may be whatever you like; the scoring is unit-invariant in any consistent rescaling of $C_\ell$, so you can emulate $D_\ell = \ell(\ell+1)C_\ell/(2\pi)$ and rescale, or emulate $C_\ell$ directly — either is fine as long as you do the same thing for every multipole of every spectrum.
 
-**Lower is better.** One decade of precision trades for one decade of speed. See [`scoring.md`](scoring.md) for the full mathematical form.
+## The interface you must implement
+
+Any object with a `predict(params: dict) -> dict` method. Example:
+
+```python
+import numpy as np
+
+class MyEmulator:
+    def __init__(self, weights_path):
+        self.params_order = ("omega_b", "omega_cdm", "H0",
+                             "tau_reio", "ln10^{10}A_s", "n_s")
+        self.model = load_your_model(weights_path)
+
+    def predict(self, params: dict) -> dict[str, np.ndarray]:
+        x = np.array([params[k] for k in self.params_order])
+        # ... your neural net call here ...
+        return {"tt": tt, "te": te, "ee": ee, "pp": pp}
+```
+
+That is all the scorer requires — no base class, no registration, no extra methods.
+
+## Scoring
+
+Full definition in [`scoring.md`](scoring.md). Short version:
+
+For every ordered pair $(i, j)$ of test-set cosmologies, the scorer treats $C_\ell^{\text{true}}(\theta_i)$ as mock data and evaluates the full-sky, cosmic-variance-limited Wishart log-likelihood with theory = `true(θ_j)` and with theory = `emulator(θ_j)`. The difference between those two χ²s measures the emulator's likelihood-level error.
+
+- **Primary precision score** (lower is better):
+  $$S_{\text{prec}} = \frac{1}{N(N-1)} \sum_{i \neq j} \bigl|\, \chi^2_{\text{emu}}(i,j) - \chi^2_{\text{true}}(i,j) \,\bigr|$$
+  i.e. **MAE on Δχ²** over all 24 995 000 off-diagonal pairs. No cut — uses every pair.
+- **Speed score**:
+  $T_{\text{CPU, ms}}$ = mean wall time per `predict()` call, averaged over 1 000 warm sequential calls with fresh LHC parameters, with JAX/TF pinned to CPU.
+- **Combined score** (lower is better):
+  $$S = \log_{10}\!\bigl(S_{\text{prec}}\bigr) + \alpha\,\log_{10}\!\bigl(T_{\text{CPU, ms}}\bigr),\qquad \alpha = 1.$$
+  Halving precision error compensates doubling inference time, and vice versa.
+
+## How to run the scorer
+
+One call. That's it.
+
+```python
+import cmbemu as cec
+
+emu = MyEmulator(weights_path="...")
+result = cec.get_score(emu)
+
+print(f"combined_S : {result['combined_S']:.3f}")
+print(f"precision  : {result['mae_total']['mae']:.3e}")
+print(f"CMB block  : {result['mae_cmb']['mae']:.3e}")
+print(f"PP block   : {result['mae_pp']['mae']:.3e}")
+print(f"t_cpu_ms   : {result['timing']['t_cpu_ms_mean']:.3g}")
+```
+
+`get_score` returns a dict with:
+
+| Key             | Type   | Meaning |
+|-----------------|--------|---------|
+| `mae_total`     | dict   | Precision on the full likelihood (CMB+PP) |
+| `mae_cmb`       | dict   | Precision restricted to the TT/TE/EE 2×2 Wishart block |
+| `mae_pp`        | dict   | Precision restricted to the φφ block |
+| `timing`        | dict   | `t_cpu_ms_mean`, `t_cpu_ms_median`, `t_cpu_ms_std`, `n_calls`, `n_warmup`, `jax_on_cpu` |
+| `combined_S`    | float  | The headline number you're optimized against |
+| `alpha`         | float  | Tradeoff weight (fixed at 1.0) |
+| `n_test`        | int    | 5000 |
+
+Each `mae_*` entry is `{"mae": ..., "median_abs_diff": ..., "max_abs_diff": ..., "n_pairs": ...}`.
+
+### CPU pinning for speed timing
+
+Timing is done single-threaded on CPU. **Before importing your emulator or JAX**, set:
+
+```bash
+export JAX_PLATFORMS=cpu
+export CUDA_VISIBLE_DEVICES=
+```
+
+Pass `strict_cpu=True` to `get_score` to make this a hard requirement rather than a warning:
+
+```python
+result = cec.get_score(emu, strict_cpu=True)
+```
+
+Skip timing entirely (useful while iterating on precision) with `measure_timing=False`. `combined_S` is `None` in that case.
 
 ## Three leaderboards
 
-Because **TT/TE/EE share a 2×2 Wishart covariance** and **φφ is independent**, these are the natural composability units:
+TT, TE, EE share a 2×2 Wishart covariance — they must be emulated jointly. φφ is independent. These are the natural composability units, so there are three ranked tracks:
 
-1. **Combined track (primary).** `mae_total` + speed → `combined_S`. Requires submitting all four spectra consistently.
-2. **CMB-block track.** Only the TT/TE/EE contribution to $\chi^2$, scored with the 2×2 Wishart. Requires submitting TT/TE/EE jointly (positive-definite constraint).
-3. **PP track.** Only the $\phi\phi$ contribution. Independent of the other three — can be submitted alone.
+1. **Combined track (primary).** `combined_S` computed from `mae_total` + timing. Requires a submission that emits all four spectra consistently (in particular, $|C_\ell^{TE}|^2 < C_\ell^{TT} \cdot C_\ell^{EE}$ at every $\ell$ so the 2×2 matrix stays positive definite).
+2. **CMB-block track.** `combined_S` computed from `mae_cmb` + timing. Requires TT/TE/EE but not φφ.
+3. **PP track.** `combined_S` from `mae_pp` + timing. Requires φφ only.
 
-Participants can enter any subset of tracks. Per-spectrum raw-$C_\ell$ MAE (TT-only, TE-only, EE-only, PP-only) is reported as a diagnostic but is not ranked — those aren't physically valid likelihoods.
+You can enter any subset of tracks. Two submissions can each win one of {CMB, PP} and a user could compose the two into a full emulator.
+
+Per-spectrum raw-$C_\ell$ MAE (TT-only, TE-only, EE-only, PP-only) is exposed by other utilities but **not ranked** — those aren't physically valid likelihoods on their own.
+
+## What to submit
+
+For each track you enter:
+
+1. The `Emulator` class (as above) and any additional Python modules needed to load and run it.
+2. Trained weights / serialized state.
+3. A training script that reproduces those weights from the released training set.
+4. A short writeup (≤ 2 pages) covering:
+   - Architecture and training hyperparameters.
+   - Whether you used only the released training set or also regenerated more data. If the latter, a scaling curve (precision vs. $N_\text{train}$) is strongly encouraged.
+   - Any pre/post-processing applied to the spectra (log, PCA, $D_\ell$ rescaling, etc.).
 
 ## Rules
 
 ### Allowed
-- Any emulator architecture (transformers, MLPs, PCA + NN, Gaussian processes, symbolic regression...).
-- Any ML framework (JAX preferred, but PyTorch / TensorFlow / plain numpy also fine).
-- Generating **additional** training data via `cmbemu.generate_data(...)` — participants are encouraged to study how their architecture scales with $N_\text{train}$ and report this in their writeup.
-- Mixing and matching emulators across tracks — e.g. someone might win CMB-block and someone else the PP track.
+- Any emulator architecture: MLPs, transformers, PCA + NN, Gaussian processes, symbolic regression.
+- Any ML framework (JAX preferred for timing reasons, but PyTorch / TensorFlow / plain numpy also fine).
+- Generating **additional** training cosmologies via `cmbemu.generate_data(...)` from the same parameter prior, and reporting how your architecture scales with $N_\text{train}$.
+- Any amount of GPU compute for training.
 
 ### Prohibited
-- Using any cosmology code other than `classy_sz` / `classy_szfast` as ground truth.
-- Training or evaluating against the 5k **test set** — it is held out for scoring only.
-- Scoring under a non-default `cosmo_model`; the official dataset is locked to `cosmo_model=6`.
+- Using the 5 000-point test set in any form of training or hyperparameter selection. It is held out for scoring only.
+- Replacing the reference spectra with output from a different cosmology code (CLASS, CAMB, or other).
+- Multi-threading inside `predict()` to inflate the timing benchmark; the container exposes 64 CPUs but the score is measured with JAX/TF pinned to a single one.
 
-### Submission format
-A Python object exposing
+## Reference hardware (scoring container)
+
+- 64 CPUs / 128 GB RAM / 1 GPU.
+- **Scoring uses 1 CPU** because MCMC chains are single-threaded per chain.
+- Training is done on your own hardware; any GPU is fine.
+
+## Baselines
+
+Two trivial baselines ship with the package so you can sanity-check your scoring setup:
 
 ```python
-class Emulator:
-    def predict(self, params: dict) -> dict[str, np.ndarray]:
-        """Given a dict with the six LCDM parameters (names as in
-        cmbemu.PARAM_NAMES), return a dict with keys
-        "tt", "te", "ee", "pp" and array shapes
-        (LMAX_CMB + 1,) for tt/te/ee and (LMAX_PP + 1,) for pp.
-        """
+# Always returns the Planck fiducial spectrum, regardless of input
+emu = cec.ConstantPlanck()
+
+# 1-NN lookup on the training set in normalized parameter space
+train = cec.load_train()
+emu = cec.NearestNeighbour(train)
+
+result = cec.get_score(emu)
 ```
 
-Submissions include: the emulator class + its trained weights, a training script (for reproducibility), and a short writeup discussing architecture, training setup, and $N_\text{train}$ scaling.
+Expected ballpark on the full test set: `ConstantPlanck` → `combined_S ≈ 4.2` (huge precision error, microsecond speed). Any real emulator should beat this on precision by many decades.
 
-## Reference hardware
+## End-to-end example
 
-- **Training**: participants' choice (authors have an NVIDIA RTX 6000 Pro available).
-- **Scoring container**: 64 CPUs / 128 GB / 1 GPU. The competition's `get_score` **times on 1 CPU** with JAX/TF pinned to CPU, because MCMC chains are single-threaded.
+A minimum viable submission, beginning to end:
 
-## Baselines shipped
+```python
+import numpy as np
+import cmbemu as cec
 
-To calibrate the leaderboard:
+class MyEmulator:
+    def __init__(self):
+        self.train = cec.load_train()  # your training data
 
-- **`ConstantPlanck`**: always returns the Planck fiducial spectrum. Ignores inputs. Zero-knowledge floor.
-- **`NearestNeighbour`**: looks up the nearest training point in normalized parameter space. Zero interpolation, uses training data as a lookup table.
+    def predict(self, params: dict) -> dict[str, np.ndarray]:
+        # replace with a trained model — this one just cheats
+        # by returning the first training point
+        idx = 0
+        return {"tt": self.train["tt"][idx],
+                "te": self.train["te"][idx],
+                "ee": self.train["ee"][idx],
+                "pp": self.train["pp"][idx]}
 
-Both are importable as `cmbemu.ConstantPlanck` / `cmbemu.NearestNeighbour`.
+emu = MyEmulator()
+result = cec.get_score(emu)
+print(result)
+```
+
+Run this to confirm your install works end-to-end, then replace the body of `predict` with your actual model.
